@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip list *)",
+      "Bash(/home/egoodwin/src/CBRRanger/env/bin/python --version)",
+      "Bash(/home/egoodwin/src/CBRRanger/env/bin/pip list *)",
+      "Bash(env/bin/pip install *)",
+      "Bash(python3 -m venv env)",
+      "Bash(env/bin/python -)",
+      "Bash(env/bin/python -m pytest -v)",
+      "Bash(QT_QPA_PLATFORM=offscreen env/bin/python -)",
+      "Bash(env/bin/ruff check *)",
+      "Bash(env/bin/black --check src tests main.py)",
+      "Bash(env/bin/black src *)",
+      "Bash(env/bin/python -m pytest -q)",
+      "Skill(run)",
+      "Skill(run:*)",
+      "Bash(python3)",
+      "Bash(python -m pytest tests/test_thumbnail_grid.py -v -k \"drag\")",
+      "Bash(python -m pytest tests/test_thumbnail_grid.py -v)",
+      "Bash(python -m pytest tests/ -v)"
+    ]
+  }
+}
