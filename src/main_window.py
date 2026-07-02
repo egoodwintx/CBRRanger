@@ -12,6 +12,8 @@ from src.comic_file import ComicArchive, ComicFileError, EmptyArchiveError
 from src.image_loader import ImageLoader
 from src.thumbnail_grid import ReorderCommand, ThumbnailGrid
 
+PAGE_INDEX_ROLE = 0
+
 APP_NAME = "CBRRanger"
 OPEN_FILTER = "Comic archives (*.cbz *.cbr *.zip *.rar);;All files (*)"
 SAVE_FILTER = "Comic Book ZIP (*.cbz)"

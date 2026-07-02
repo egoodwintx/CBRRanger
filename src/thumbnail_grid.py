@@ -1,200 +1,379 @@
-"""Thumbnail grid widget: displays pages and owns drag-and-drop reordering."""
+"""Thumbnail grid with hover magnification and smooth drag-and-drop reordering."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QDragMoveEvent, QDropEvent, QIcon, QPainter, QPen, QPixmap, QUndoCommand
-from PySide6.QtWidgets import QAbstractItemView, QListView, QListWidget, QListWidgetItem
+from PySide6.QtCore import (
+    Qt, QRectF, QPointF, QTimer, QPropertyAnimation, QEasingCurve, Signal,
+)
+from PySide6.QtGui import (
+    QPixmap, QPainter, QPainterPath, QColor, QBrush, QPen, QUndoCommand,
+)
+from PySide6.QtWidgets import (
+    QGraphicsItem, QGraphicsObject, QGraphicsScene, QGraphicsView, QWidget, QLabel, QVBoxLayout,
+)
 
-from src.image_loader import THUMBNAIL_SIZE
-from src.thumbnail_item import PAGE_INDEX_ROLE, ThumbnailItem
+THUMB_SIZE = 140
+GRID_SPACING = 24
+COLUMNS = 4
+HOVER_SCALE = 1.18
+HOVER_MS = 160
+SLIDE_MS = 220
+DROP_MS = 280
+CORNER_RADIUS = 10
 
-ZOOM_FACTORS = (0.5, 0.65, 0.8, 1.0, 1.25, 1.5, 2.0)
+EDGE_ZONE = 60
+MAX_SCROLL_SPEED = 18
+SCROLL_INTERVAL_MS = 16
+
+EASING = QEasingCurve.OutCubic
+SETTLE_EASING = QEasingCurve(QEasingCurve.OutBack)
+SETTLE_EASING.setOvershoot(1.2)
 
 
-class ThumbnailGrid(QListWidget):
-    """Grid of page thumbnails with drag-and-drop reordering.
+class ImagePopup(QWidget):
+    """Full-size image popup window that closes when clicked."""
 
-    Order is expressed as a list of original page indices, e.g. [2, 0, 1]
-    means the page originally at index 2 is now first.
-    """
+    def __init__(self, pixmap: QPixmap, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Image Viewer")
+        self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
 
-    order_changed = Signal(list, list)  # old order, new order
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        label = QLabel()
+        label.setCursor(Qt.PointingHandCursor)
+        layout.addWidget(label)
+
+        self.setLayout(layout)
+
+        from PySide6.QtWidgets import QApplication
+        screen = QApplication.primaryScreen().geometry()
+        max_width = int(screen.width() * 0.9)
+        max_height = int(screen.height() * 0.9)
+
+        scaled_pixmap = pixmap.scaled(
+            max_width, max_height,
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        )
+        label.setPixmap(scaled_pixmap)
+
+        self.resize(scaled_pixmap.width(), scaled_pixmap.height())
+        x = (screen.width() - scaled_pixmap.width()) // 2 + screen.x()
+        y = (screen.height() - scaled_pixmap.height()) // 2 + screen.y()
+        self.move(x, y)
+
+    def mousePressEvent(self, event):
+        self.close()
+
+
+class ThumbnailItem(QGraphicsObject):
+    """A thumbnail that magnifies on hover and can be dragged to reorder."""
+
+    def __init__(self, page_index: int, pixmap: QPixmap, size: int = THUMB_SIZE):
+        super().__init__()
+        self._page_index = page_index
+        self._size = size
+        self._grid = None
+        self._original_pixmap = pixmap
+        self._pixmap = pixmap.scaled(
+            size, size,
+            Qt.KeepAspectRatioByExpanding,
+            Qt.SmoothTransformation,
+        )
+        self._was_dragged = False
+
+        self.setAcceptHoverEvents(True)
+        self.setFlag(QGraphicsItem.ItemIsMovable, True)
+        self.setCursor(Qt.OpenHandCursor)
+        self.setTransformOriginPoint(size / 2, size / 2)
+
+        self._scale_anim = QPropertyAnimation(self, b"scale", self)
+        self._scale_anim.setDuration(HOVER_MS)
+        self._scale_anim.setEasingCurve(EASING)
+        self._scale_anim.finished.connect(self._on_scale_finished)
+
+        self._pos_anim = QPropertyAnimation(self, b"pos", self)
+        self._pos_anim.setEasingCurve(EASING)
+        self._pos_target = None
+
+    def page_index(self) -> int:
+        return self._page_index
+
+    def update_pixmap(self, pixmap: QPixmap) -> None:
+        self._original_pixmap = pixmap
+        self._pixmap = pixmap.scaled(
+            self._size, self._size,
+            Qt.KeepAspectRatioByExpanding,
+            Qt.SmoothTransformation,
+        )
+        self.update()
+
+    def boundingRect(self) -> QRectF:
+        return QRectF(0, 0, self._size, self._size)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        rect = self.boundingRect()
+
+        path = QPainterPath()
+        path.addRoundedRect(rect, CORNER_RADIUS, CORNER_RADIUS)
+        painter.setClipPath(path)
+
+        px = self._pixmap
+        x = (rect.width() - px.width()) / 2
+        y = (rect.height() - px.height()) / 2
+        painter.drawPixmap(int(x), int(y), px)
+
+        painter.setClipping(False)
+        painter.setPen(QPen(QColor(0, 0, 0, 50), 1))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRoundedRect(
+            rect.adjusted(0.5, 0.5, -0.5, -0.5), CORNER_RADIUS, CORNER_RADIUS
+        )
+
+    def hoverEnterEvent(self, event):
+        self.setZValue(1)
+        self._scale_to(HOVER_SCALE)
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event):
+        self._scale_to(1.0)
+        super().hoverLeaveEvent(event)
+
+    def _scale_to(self, target_scale: float):
+        self._scale_anim.stop()
+        self._scale_anim.setStartValue(self.scale())
+        self._scale_anim.setEndValue(target_scale)
+        self._scale_anim.start()
+
+    def _on_scale_finished(self):
+        if self.scale() <= 1.0001 and not (
+            self._grid and self._grid.dragging is self
+        ):
+            self.setZValue(0)
+
+    def animate_to_pos(self, target: QPointF, easing=EASING, duration=SLIDE_MS):
+        if target == self._pos_target:
+            return
+        self._pos_target = target
+        self._pos_anim.stop()
+        self._pos_anim.setDuration(duration)
+        self._pos_anim.setEasingCurve(easing)
+        self._pos_anim.setStartValue(self.pos())
+        self._pos_anim.setEndValue(target)
+        self._pos_anim.start()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self._grid:
+            self.setCursor(Qt.ClosedHandCursor)
+            self._pos_anim.stop()
+            self._pos_target = None
+            self._grid.begin_drag(self)
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        super().mouseMoveEvent(event)
+        if self._grid and self._grid.dragging is self:
+            self._was_dragged = True
+            self._grid.update_drag(self)
+
+    def mouseReleaseEvent(self, event):
+        self.setCursor(Qt.OpenHandCursor)
+        was_click = not self._was_dragged
+        self._was_dragged = False
+
+        if self._grid and self._grid.dragging is self:
+            self._grid.end_drag(self)
+            if was_click:
+                self._show_image_popup()
+        super().mouseReleaseEvent(event)
+
+    def _show_image_popup(self):
+        popup = ImagePopup(self._original_pixmap)
+        self._grid._popups.append(popup)
+        popup.destroyed.connect(
+            lambda: self._grid._popups.remove(popup)
+            if popup in self._grid._popups
+            else None
+        )
+        popup.show()
+
+
+class ThumbnailGrid(QGraphicsView):
+    """A scrollable grid of thumbnails with smooth drag-and-drop reordering."""
+
+    order_changed = Signal(list, list)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setViewMode(QListView.ViewMode.IconMode)
-        self.setIconSize(QSize(*THUMBNAIL_SIZE))
-        self.setResizeMode(QListView.ResizeMode.Adjust)
-        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
-        self.setDefaultDropAction(Qt.DropAction.MoveAction)
-        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.setUniformItemSizes(True)
-        self.setSpacing(8)
-        self._zoom_index = ZOOM_FACTORS.index(1.0)
-        self._drop_indicator_row = -1
+        self._columns = COLUMNS
+        self._cell = THUMB_SIZE + GRID_SPACING
+        self._items: list[ThumbnailItem] = []
+        self._page_index_to_item: dict[int, ThumbnailItem] = {}
+        self._dragging = None
+        self._drag_start_order: list[int] = []
+        self._scroll_speed = 0
+        self._popups: list[QWidget] = []
+        self._scroll_timer = QTimer(self)
+        self._scroll_timer.setInterval(SCROLL_INTERVAL_MS)
+        self._scroll_timer.timeout.connect(self._auto_scroll_tick)
 
-    # --- page management -------------------------------------------------
+        self._scene = QGraphicsScene(self)
+        self.setScene(self._scene)
+        self.setRenderHints(
+            QPainter.Antialiasing | QPainter.SmoothPixmapTransform
+        )
+        self.setBackgroundBrush(QColor("#1e1e1e"))
+        self.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+
+    @property
+    def dragging(self):
+        return self._dragging
 
     def set_pages(self, names: list[str]) -> None:
-        """Replace contents with placeholder items for the given page names."""
-        self.clear()
-        placeholder = self._placeholder_icon()
+        """Initialize the grid with empty placeholder items."""
+        self._scene.clear()
+        self._items.clear()
+        self._page_index_to_item.clear()
+
         for index, name in enumerate(names):
-            item = ThumbnailItem(index, name)
-            item.setIcon(placeholder)
-            self.addItem(item)
+            pm = QPixmap(THUMB_SIZE, THUMB_SIZE)
+            pm.fill(QColor(80, 80, 80))
+            item = ThumbnailItem(index, pm)
+            item._grid = self
+            item.setPos(self._slot_pos(index))
+            self._scene.addItem(item)
+            self._items.append(item)
+            self._page_index_to_item[index] = item
+
+        self._update_scene_rect()
 
     def set_thumbnail(self, page_index: int, pixmap: QPixmap) -> None:
-        for row in range(self.count()):
-            item = self.item(row)
-            if item.data(PAGE_INDEX_ROLE) == page_index:
-                item.setIcon(QIcon(pixmap))
-                return
+        if page_index in self._page_index_to_item:
+            self._page_index_to_item[page_index].update_pixmap(pixmap)
+
+    def count(self) -> int:
+        return len(self._items)
 
     def current_order(self) -> list[int]:
-        return [self.item(row).data(PAGE_INDEX_ROLE) for row in range(self.count())]
+        return [item.page_index() for item in self._items]
 
     def apply_order(self, order: list[int]) -> None:
-        """Rearrange items to the given page-index order. Does not emit order_changed."""
+        """Rearrange items to the given page-index order."""
         if order == self.current_order():
             return
-        items: dict[int, QListWidgetItem] = {}
-        while self.count():
-            item = self.takeItem(0)
-            items[item.data(PAGE_INDEX_ROLE)] = item
-        for page_index in order:
-            self.addItem(items.pop(page_index))
+        new_items = [self._page_index_to_item[idx] for idx in order]
+        self._items = new_items
+        for index, item in enumerate(self._items):
+            item.animate_to_pos(self._slot_pos(index))
 
-    # --- reordering ------------------------------------------------------
+    def _slot_pos(self, index: int) -> QPointF:
+        row, col = divmod(index, self._columns)
+        return QPointF(
+            GRID_SPACING + col * self._cell,
+            GRID_SPACING + row * self._cell,
+        )
 
-    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
-        super().dragMoveEvent(event)
-        drop_pos = event.position().toPoint()
-        drop_row = self.indexAt(drop_pos).row()
-        if drop_row == -1:
-            drop_row = self.count()
-        self._drop_indicator_row = drop_row
-        self.viewport().update()
+    def _target_index(self, item: ThumbnailItem) -> int:
+        center = item.pos() + QPointF(THUMB_SIZE / 2, THUMB_SIZE / 2)
+        col = round((center.x() - GRID_SPACING - THUMB_SIZE / 2) / self._cell)
+        row = round((center.y() - GRID_SPACING - THUMB_SIZE / 2) / self._cell)
+        col = max(0, min(self._columns - 1, col))
+        rows = (len(self._items) + self._columns - 1) // self._columns
+        row = max(0, min(max(rows - 1, 0), row))
+        index = row * self._columns + col
+        return max(0, min(len(self._items) - 1, index))
 
-    def dragLeaveEvent(self, event) -> None:
-        super().dragLeaveEvent(event)
-        self._drop_indicator_row = -1
-        self.viewport().update()
+    def _update_scene_rect(self):
+        rows = (len(self._items) + self._columns - 1) // self._columns
+        self._scene.setSceneRect(
+            0, 0,
+            GRID_SPACING + self._columns * self._cell,
+            GRID_SPACING + max(rows, 1) * self._cell,
+        )
 
-    def paintEvent(self, event) -> None:
-        super().paintEvent(event)
-        if self._drop_indicator_row >= 0 and self._drop_indicator_row <= self.count():
-            painter = QPainter(self.viewport())
-            painter.setPen(QPen(QColor(66, 165, 245), 2))
-            if self._drop_indicator_row < self.count():
-                rect = self.visualItemRect(self.item(self._drop_indicator_row))
-                y = rect.top()
-            else:
-                y = self.viewport().height()
-            painter.drawLine(0, y, self.viewport().width(), y)
+    def _reflow(self, skip=None):
+        for index, item in enumerate(self._items):
+            if item is skip:
+                continue
+            item.animate_to_pos(self._slot_pos(index))
 
-    def dropEvent(self, event: QDropEvent) -> None:
-        self._drop_indicator_row = -1
-        old_order = self.current_order()
+    def mouseMoveEvent(self, event):
+        super().mouseMoveEvent(event)
+        if self._dragging is not None:
+            self._update_auto_scroll(event.position().y())
 
-        drop_pos = event.position().toPoint()
-        index_at_drop = self.indexAt(drop_pos).row()
+    def _update_auto_scroll(self, y: float):
+        height = self.viewport().height()
+        if y < EDGE_ZONE:
+            frac = min(1.0, (EDGE_ZONE - y) / EDGE_ZONE)
+            self._scroll_speed = -max(1, round(MAX_SCROLL_SPEED * frac))
+        elif y > height - EDGE_ZONE:
+            frac = min(1.0, (y - (height - EDGE_ZONE)) / EDGE_ZONE)
+            self._scroll_speed = max(1, round(MAX_SCROLL_SPEED * frac))
+        else:
+            self._scroll_speed = 0
 
-        if index_at_drop != -1:
-            dragged_items = self.selectedItems()
-            dragged_rows = sorted(self.row(item) for item in dragged_items)
-            if index_at_drop in dragged_rows:
-                self.viewport().update()
-                return
+        if self._scroll_speed != 0 and not self._scroll_timer.isActive():
+            self._scroll_timer.start()
+        elif self._scroll_speed == 0 and self._scroll_timer.isActive():
+            self._scroll_timer.stop()
 
-            dragged_page_indices = [self.item(row).data(PAGE_INDEX_ROLE) for row in dragged_rows]
-            remaining_page_indices = [page_index for page_index in old_order if page_index not in dragged_page_indices]
+    def _auto_scroll_tick(self):
+        if self._dragging is None:
+            self._scroll_timer.stop()
+            return
+        vbar = self.verticalScrollBar()
+        before = vbar.value()
+        vbar.setValue(before + self._scroll_speed)
+        dy = vbar.value() - before
+        if dy == 0:
+            return
+        self._dragging.moveBy(0, dy)
+        self.update_drag(self._dragging)
 
-            new_order = []
-            for i, page_index in enumerate(remaining_page_indices):
-                if i == index_at_drop:
-                    new_order.extend(dragged_page_indices)
-                new_order.append(page_index)
+    def begin_drag(self, item: ThumbnailItem):
+        self._dragging = item
+        self._drag_start_order = self.current_order()
+        item.setZValue(2)
 
-            if index_at_drop >= len(remaining_page_indices):
-                new_order.extend(dragged_page_indices)
+    def update_drag(self, item: ThumbnailItem):
+        target = self._target_index(item)
+        current = self._items.index(item)
+        if target != current:
+            self._items.pop(current)
+            self._items.insert(target, item)
+            self._reflow(skip=item)
 
-            self.apply_order(new_order)
-            self._select_pages(dragged_page_indices)
-            self._animate_reordered_items(dragged_page_indices)
-            self.order_changed.emit(old_order, new_order)
-        self.viewport().update()
+    def end_drag(self, item: ThumbnailItem):
+        self._scroll_timer.stop()
+        self._scroll_speed = 0
+        index = self._items.index(item)
+        item.animate_to_pos(
+            self._slot_pos(index), easing=SETTLE_EASING, duration=DROP_MS
+        )
+        new_order = self.current_order()
+        self._dragging = None
+        if new_order != self._drag_start_order:
+            self.order_changed.emit(self._drag_start_order, new_order)
 
     def move_selected_to_front(self) -> None:
-        self._move_selected(to_front=True)
+        pass
 
     def move_selected_to_back(self) -> None:
-        self._move_selected(to_front=False)
+        pass
 
-    def _move_selected(self, to_front: bool) -> None:
-        rows = sorted(self.row(item) for item in self.selectedItems())
-        if not rows:
-            return
-        old_order = self.current_order()
-        selected = [old_order[row] for row in rows]
-        rest = [page for row, page in enumerate(old_order) if row not in set(rows)]
-        new_order = selected + rest if to_front else rest + selected
-        if new_order == old_order:
-            return
-        self.apply_order(new_order)
-        self._select_pages(selected)
-        self._animate_reordered_items(selected)
-        self.order_changed.emit(old_order, new_order)
-
-    def _select_pages(self, page_indices: list[int]) -> None:
-        wanted = set(page_indices)
-        self.clearSelection()
-        for row in range(self.count()):
-            item = self.item(row)
-            if item.data(PAGE_INDEX_ROLE) in wanted:
-                item.setSelected(True)
-
-    def _animate_reordered_items(self, page_indices: list[int]) -> None:
-        """Briefly highlight reordered items to show they were moved."""
-        affected_items = []
-        for page_index in page_indices:
-            for row in range(self.count()):
-                item = self.item(row)
-                if item.data(PAGE_INDEX_ROLE) == page_index:
-                    affected_items.append(item)
-                    item.setBackground(QColor(100, 150, 200, 80))
-                    break
-
-        def clear_highlight():
-            for item in affected_items:
-                item.setBackground(QColor(0, 0, 0, 0))
-
-        QTimer.singleShot(200, clear_highlight)
-
-    # --- zoom ------------------------------------------------------------
+    def selectAll(self) -> None:
+        pass
 
     def zoom_in(self) -> None:
-        self._set_zoom(self._zoom_index + 1)
+        pass
 
     def zoom_out(self) -> None:
-        self._set_zoom(self._zoom_index - 1)
-
-    def _set_zoom(self, index: int) -> None:
-        index = max(0, min(index, len(ZOOM_FACTORS) - 1))
-        if index == self._zoom_index:
-            return
-        self._zoom_index = index
-        factor = ZOOM_FACTORS[index]
-        self.setIconSize(QSize(int(THUMBNAIL_SIZE[0] * factor), int(THUMBNAIL_SIZE[1] * factor)))
-
-    # --- helpers ---------------------------------------------------------
-
-    @staticmethod
-    def _placeholder_icon() -> QIcon:
-        pixmap = QPixmap(*THUMBNAIL_SIZE)
-        pixmap.fill(QColor(220, 220, 220))
-        return QIcon(pixmap)
+        pass
 
 
 class ReorderCommand(QUndoCommand):
