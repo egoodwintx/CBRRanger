@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (
     QGraphicsItem, QGraphicsObject, QGraphicsScene, QGraphicsView, QWidget, QLabel, QVBoxLayout,
 )
 
+from src.image_loader import decode_full_image
+
 THUMB_SIZE = 140
 GRID_SPACING = 24
 COLUMNS = 4
@@ -192,7 +194,7 @@ class ThumbnailItem(QGraphicsObject):
         super().mouseReleaseEvent(event)
 
     def _show_image_popup(self):
-        popup = ImagePopup(self._original_pixmap)
+        popup = ImagePopup(self._grid.full_pixmap(self._page_index))
         self._grid._popups.append(popup)
         popup.destroyed.connect(
             lambda: self._grid._popups.remove(popup)
@@ -213,6 +215,7 @@ class ThumbnailGrid(QGraphicsView):
         self._cell = THUMB_SIZE + GRID_SPACING
         self._items: list[ThumbnailItem] = []
         self._page_index_to_item: dict[int, ThumbnailItem] = {}
+        self._page_bytes: dict[int, bytes] = {}
         self._dragging = None
         self._drag_start_order: list[int] = []
         self._scroll_speed = 0
@@ -233,11 +236,17 @@ class ThumbnailGrid(QGraphicsView):
     def dragging(self):
         return self._dragging
 
-    def set_pages(self, names: list[str]) -> None:
-        """Initialize the grid with empty placeholder items."""
+    def set_pages(self, names: list[str], pages: list[bytes] | None = None) -> None:
+        """Initialize the grid with empty placeholder items.
+
+        `pages` holds the raw, full-resolution bytes for each page so the
+        click-to-view popup can decode them on demand; without it the popup
+        falls back to the low-res thumbnail.
+        """
         self._scene.clear()
         self._items.clear()
         self._page_index_to_item.clear()
+        self._page_bytes = dict(enumerate(pages)) if pages is not None else {}
 
         for index, name in enumerate(names):
             pm = QPixmap(THUMB_SIZE, THUMB_SIZE)
@@ -254,6 +263,21 @@ class ThumbnailGrid(QGraphicsView):
     def set_thumbnail(self, page_index: int, pixmap: QPixmap) -> None:
         if page_index in self._page_index_to_item:
             self._page_index_to_item[page_index].update_pixmap(pixmap)
+
+    def full_pixmap(self, page_index: int) -> QPixmap:
+        """Full-resolution pixmap for a page, decoded from the raw bytes.
+
+        Falls back to the (low-res) thumbnail if the bytes are unavailable or
+        cannot be decoded, so the popup always shows something.
+        """
+        item = self._page_index_to_item.get(page_index)
+        data = self._page_bytes.get(page_index)
+        if data is not None:
+            try:
+                return QPixmap.fromImage(decode_full_image(data))
+            except Exception:
+                pass  # fall back to the thumbnail below
+        return item._original_pixmap if item is not None else QPixmap()
 
     def count(self) -> int:
         return len(self._items)

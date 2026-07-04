@@ -120,7 +120,7 @@ class MainWindow(QMainWindow):
         self._save_path = path if suffix in comic_file.ZIP_SUFFIXES else None
         self._undo_stack.clear()
         self._loader.cancel()
-        self._grid.set_pages(comic.names)
+        self._grid.set_pages(comic.names, comic.pages)
         self._loader.load_thumbnails(comic.pages)
         self.statusBar().showMessage(f"Loaded {len(comic.pages)} pages from {Path(path).name}")
         self._update_title()

@@ -332,8 +332,6 @@ def make_test_cbz(path, num_pages=5):
 ---
 
 ## Out of Scope (for now)
-
-- Viewing/reading pages at full size (this is a *reorder* tool, not a reader)
 - Editing page metadata or ComicInfo.xml fields
 - Splitting or merging multiple comic files
 - Converting between image formats

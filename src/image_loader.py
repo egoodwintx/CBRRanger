@@ -11,10 +11,8 @@ from PySide6.QtGui import QImage, QPixmap
 THUMBNAIL_SIZE = (180, 240)  # width, height in pixels
 
 
-def _decode_thumbnail(data: bytes, size: tuple[int, int]) -> QImage:
-    with Image.open(io.BytesIO(data)) as img:
-        img.thumbnail(size, Image.Resampling.LANCZOS)
-        rgba = img.convert("RGBA")
+def _to_qimage(img: Image.Image) -> QImage:
+    rgba = img.convert("RGBA")
     qimage = QImage(
         rgba.tobytes(),
         rgba.width,
@@ -23,6 +21,18 @@ def _decode_thumbnail(data: bytes, size: tuple[int, int]) -> QImage:
         QImage.Format.Format_RGBA8888,
     )
     return qimage.copy()  # detach from the Pillow buffer before it is freed
+
+
+def _decode_thumbnail(data: bytes, size: tuple[int, int]) -> QImage:
+    with Image.open(io.BytesIO(data)) as img:
+        img.thumbnail(size, Image.Resampling.LANCZOS)
+        return _to_qimage(img)
+
+
+def decode_full_image(data: bytes) -> QImage:
+    """Decode page bytes at full resolution (for the click-to-view popup)."""
+    with Image.open(io.BytesIO(data)) as img:
+        return _to_qimage(img)
 
 
 class _WorkerSignals(QObject):
