@@ -18,5 +18,8 @@ build/
 dist/
 *.spec
 
+# Test Assets
+test_comic.cbz
+
 # Claude
 .claude/*
