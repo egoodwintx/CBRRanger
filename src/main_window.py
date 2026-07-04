@@ -64,29 +64,11 @@ class MainWindow(QMainWindow):
         self._quit_action.setShortcut(QKeySequence("Ctrl+Q"))
         self._quit_action.triggered.connect(self.close)
 
-        self._select_all_action = QAction("Select &All", self)
-        self._select_all_action.setShortcut(QKeySequence("Ctrl+A"))
-        self._select_all_action.triggered.connect(self._grid.selectAll)
-
-        self._move_front_action = QAction("Move to &Front", self)
-        self._move_front_action.triggered.connect(self._grid.move_selected_to_front)
-
-        self._move_back_action = QAction("Move to &Back", self)
-        self._move_back_action.triggered.connect(self._grid.move_selected_to_back)
-
         self._undo_action = self._undo_stack.createUndoAction(self, "&Undo")
         self._undo_action.setShortcut(QKeySequence("Ctrl+Z"))
 
         self._redo_action = self._undo_stack.createRedoAction(self, "&Redo")
         self._redo_action.setShortcut(QKeySequence("Ctrl+Y"))
-
-        self._zoom_in_action = QAction("Zoom +", self)
-        self._zoom_in_action.setShortcut(QKeySequence("Ctrl+="))
-        self._zoom_in_action.triggered.connect(self._grid.zoom_in)
-
-        self._zoom_out_action = QAction("Zoom -", self)
-        self._zoom_out_action.setShortcut(QKeySequence("Ctrl+-"))
-        self._zoom_out_action.triggered.connect(self._grid.zoom_out)
 
         self._about_action = QAction("&About", self)
         self._about_action.triggered.connect(self._show_about)
@@ -101,11 +83,6 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self._quit_action)
 
         edit_menu = self.menuBar().addMenu("&Edit")
-        edit_menu.addAction(self._select_all_action)
-        edit_menu.addSeparator()
-        edit_menu.addAction(self._move_front_action)
-        edit_menu.addAction(self._move_back_action)
-        edit_menu.addSeparator()
         edit_menu.addAction(self._undo_action)
         edit_menu.addAction(self._redo_action)
 
@@ -118,9 +95,6 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self._open_action)
         toolbar.addAction(self._save_action)
         toolbar.addAction(self._save_as_action)
-        toolbar.addSeparator()
-        toolbar.addAction(self._zoom_out_action)
-        toolbar.addAction(self._zoom_in_action)
 
     # --- file handling ----------------------------------------------------
 
@@ -208,9 +182,6 @@ class MainWindow(QMainWindow):
         for action in (
             self._save_action,
             self._save_as_action,
-            self._select_all_action,
-            self._move_front_action,
-            self._move_back_action,
         ):
             action.setEnabled(loaded)
 
