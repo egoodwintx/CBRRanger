@@ -214,6 +214,7 @@ class MainWindow(QMainWindow):
             self,
             f"About {APP_NAME}",
             f"<b>{APP_NAME}</b><br>"
-            "Rearrange pages in CBR/CBZ comic book archives.<br><br>"
-            "Drag and drop thumbnails to reorder, then save as CBZ.",
+            f"{APP_NAME} is a desktop utility to rearrange pages in CBR/CBZ comic book archives.<br><br>"
+            "Open a CBR/CBZ file, drag and drop thumbnails to reorder, then save it back in the proper order."
+            "<br><br>(c) 2026 Rana Labs",
         )
