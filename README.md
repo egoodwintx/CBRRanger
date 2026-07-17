@@ -1,6 +1,6 @@
 # CBRRanger 
 
-![Icon|100](assets/cbz_icon.png)
+<img src="assets/cbz_icon.png" width=200 alt="CBRRanger Icon"/>
 
 A simple, focused desktop tool for rearranging pages in digital comic book files
 (CBR/CBZ). Open a comic, see every page as a thumbnail in a grid, drag and drop
