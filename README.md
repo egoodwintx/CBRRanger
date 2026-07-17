@@ -4,10 +4,13 @@ A simple, focused desktop tool for rearranging pages in digital comic book files
 (CBR/CBZ). Open a comic, see every page as a thumbnail in a grid, drag and drop
 pages to reorder them, and save the result.
 
+![Main Screen](assets/CBRRanger_Main.png)
+
 ## Features
 
 - Opens **CBZ** (ZIP) and **CBR** (RAR) comic archives
 - Thumbnail grid with drag-and-drop page reordering
+- One-click zoom to show full image
 - Multi-select with **Move to Front** / **Move to Back**
 - Undo/redo for every reorder
 - Natural page sorting (`page10` comes after `page9`, not after `page1`)
@@ -15,6 +18,9 @@ pages to reorder them, and save the result.
 - Safe saves: writes to a temp file first, so the original is never corrupted
 - Always saves as CBZ (lossless, universally supported — writing CBR requires
   the proprietary `rar` binary)
+
+![Page Screen](assets/CBRRanger_Zoom.png)
+
 
 ## Requirements
 
@@ -52,10 +58,10 @@ pages to reorder them, and save the result.
 3. Run the application:
 
    ```sh
-   python3 app.py
+   python3 main.py
    ```
 
-   You can also pass a file to open directly: `python3 app.py my_comic.cbz`
+   You can also pass a file to open directly: `python3 main.py my_comic.cbz`
 
 ## Usage
 
